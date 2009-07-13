@@ -1,0 +1,179 @@
+/*** Control Panel ***/
+.sidebar {
+  position: fixed;
+  display:block;
+  top:0; width: 250px;
+  margin-top: 10px;
+}
+.sidebar a,button {
+  outline: 0;
+}
+#left-sidebar  { left:0;  margin-left: 10px;  }
+#right-sidebar { right:0; margin-right: 10px; }
+
+.sidebar button {
+  width: 100%;
+  font-size: 2.5em;
+}
+
+/** Left Sidebar **/
+#call_url #url {
+  font-size: 1.5em;
+  width: 500px;
+  z-index: 1;
+}
+#quick_call_links > br { display: none; }
+#quick_call_links > a {
+  display: block;
+  font-size: 1.5em;
+  line-height: 1.75em;
+
+  margin-top: 10px;
+
+  padding: 5px;
+  padding-left: 10px;
+  padding-right: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+
+
+  border: 1px solid black;
+  -moz-border-radius: 5px;
+  -webkit-border-radius: 5px;
+
+  color: black;
+  text-decoration: none;
+}
+#quick_call_links > a:hover {
+  background-color: #E0E0E0;
+}
+/** End Left Sidebar **/
+
+
+/** Right Sidebar **/
+#hangup {
+}
+#countdown {
+  line-height:2em;
+  margin:auto 0;
+  min-height:2em;
+  min-width:2em;
+  text-align:center;
+  font-size:5em;
+  background-color:pink;
+}
+#gather_box {
+  width: 100%;
+  border: 1px solid black;
+}
+#gather_timeout {
+  width: 100%;
+  padding: 5px 0;
+}
+#gather_keypad {
+  width: 100%;
+  display: table;
+  table-layout: fixed;
+}
+.gather_key_row {
+  display: table-row;
+}
+.gather_key {
+  display: table-cell;
+  font-size: 3.0em;
+  text-align: center;
+  text-decoration: none;
+  color: black;
+}
+.gather_key:hover {
+  background-color: #E0E0E0;
+}
+/** End Right Sidebar **/
+
+/*** End Control Panel ***/
+
+body {
+  margin: 0;
+  padding: 2.0em 10px 10px 10px;
+}
+
+
+/*** Call Flow Elements ***/
+#call_flow {
+  position: relative;
+  margin: 0 auto;
+  width: 940px;
+  -moz-border-radius-topleft: 40px;
+  -moz-border-radius-topright: 40px;
+  -webkit-border-top-left-radius: 40px;
+  -webkit-border-top-right-radius: 40px;
+  background-color: #E0E0E0;
+  padding: 20px;
+}
+button#auto_refresh_button {
+  position: fixed;
+  left: 0; right: 0; top: 0;
+  width: 500px;
+  margin: 0 auto;
+  z-index: 1;
+  font-size: 2.0em;
+  
+}
+.call_flow_header {
+  font-weight: bold;
+  font-size: 2.0em;
+  text-align: center;
+}
+
+#call_flow > div {
+  margin-top: 10px;
+}
+.say {
+  width: 50%;
+  margin-left: auto;
+  padding: 10px;
+
+  -moz-border-radius: 10px;
+  -webkit-border-radius: 10px;
+  background-color: #D7F5FF;
+
+  font-size: 1.5em;
+}
+.say span {
+  display: block;
+  margin-left: 1em;
+  text-indent: -1em;
+}
+.gather, .pause {
+  padding: 10px;
+
+  -moz-border-radius: 10px;
+  -webkit-border-radius: 10px;
+  background-color: #FF855C;
+
+  font-size: 1.3em;
+}
+.notify {
+  display: inline-block;
+  padding: 10px;
+  margin-right: 25%;
+
+  -moz-border-radius: 10px;
+  -webkit-border-radius: 10px;
+  background-color: #90FF6B;
+}
+.twiml {
+  display: block;
+  white-space: pre;
+  font-family: monospace;
+  padding: 20px;
+  -moz-border-radius: 10px;
+  -webkit-border-radius: 10px;
+  background-color:#FFFD7F;
+}
+.call-divider {
+  width:100%; height:10px;
+  margin: 5px 0;
+  background-color:gray;
+}
+/*** End Call Flow Elements ***/
