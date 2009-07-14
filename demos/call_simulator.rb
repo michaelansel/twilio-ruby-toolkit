@@ -18,7 +18,6 @@ MutexPause   = 0.5 #seconds
 before do
   # Database Mutex
   if session[:dbq_session_id]
-    puts session[:dbq_session_id]
     m = DatabaseMutex.find(:first, :conditions => {:session_id => session[:dbq_session_id]})
     if not m.nil? and (Time.now - m.updated_at) < MutexTimeout
       puts "Mutex lock: #{m.inspect}"
@@ -55,6 +54,7 @@ def session_load(params = {})
   if params[:call_handler] and session[:call_handler]
     return session.delete(:call_handler) if session[:call_handler].class != Hash
     %w{@input_status @input_verb @input_data @cookie}.each do |var|
+      # FIXME What if the hash is corrupted or missing keys?
        params[:call_handler].instance_variable_set(var, session[:call_handler][var])
     end
     session.delete(:call_handler)
@@ -157,11 +157,12 @@ ns_get "/ajax" do
   oq = DatabaseQueue.new(:queue_name => :output_queue, :session_id => session[:dbq_session_id])
   ch = Twilio::CallHandler.new( :processing_queue => pq, :output_queue => oq )
   session_load(:call_handler => ch)
-  #pq,oq = ch.instance_eval { [ @processing_queue, @output_queue ] }
-  #print "Processing Queue:"
-  #print pq.to_yaml
 
-  case params[:action].downcase
+  output = []
+  complete = true
+
+  params[:action] and params[:action].respond_to?(:downcase) and
+    case params[:action].downcase
   when 'next'
     output,complete = ch.process_queue
 
@@ -198,6 +199,7 @@ ns_get "/ajax" do
   puts "Replying with:\n#{output.to_yaml}"
   puts "Call Handler Size: #{ch.to_yaml.length}"
   puts "Session Size: #{session.to_yaml.length}"
+  # TODO Move cleanup to middleware so we wait until the request is complete and the cookie re-saved in the browser
   DatabaseMutex.delete_all(:session_id => session[:dbq_session_id])
   return output.to_json
 end
