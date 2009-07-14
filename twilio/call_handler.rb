@@ -244,6 +244,9 @@ module Twilio
       print "Previous contents: "
       puts @processing_queue.to_a.to_yaml
       @processing_queue.clear
+      @input_status = :none
+      @input_verb = nil
+      @input_data = ""
     end
 
     def call_url(url, params = {})
