@@ -172,6 +172,8 @@ class DatabaseQueue# < Array
   end
 
   def shift
+    fi = first_item
+    return nil if fi.nil?
     first_item.destroy.data
   end
 

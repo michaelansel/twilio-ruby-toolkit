@@ -25,7 +25,7 @@ module Twilio
       end
 
       def calculate_signature(url, post_data)
-        raise StandardError, "Twilio::AuthToken not set" unless defined? Twilio::AuthToken
+        raise StandardError, "Twilio::AuthToken not set" if not defined? Twilio::AuthToken || Twilio::AuthToken.nil?
 
         data = url
         post_vars = post_data.to_a.sort{|a,b| a[0].to_s <=> b[0].to_s}
