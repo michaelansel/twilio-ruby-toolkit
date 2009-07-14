@@ -107,10 +107,16 @@ module Twilio
           # Nothing left to do, reset the call handler and mark the call as completed
           # NOTE Should be handled by explicit hangups, but this is here just in case
           puts "Triggering a hangup because we are out of things to do"
-          @call_handler.hangup
+          @call_handler.phone = nil unless @call_handler.nil? or @call_handler.frozen?
+          @call_handler.hangup unless @call_handler.nil? or @call_handler.frozen?
+
+          @call_handler = nil
+          @queue.clear
           @call_status = :completed
-          @call_handler.phone = self.class.new # Just create a new stinkin' phone!
-          @call_handler.phone.call_handler = @call_handler
+          self.freeze
+
+          #@call_handler.phone = self.class.new # Just create a new stinkin' phone!
+          #@call_handler.phone.call_handler = @call_handler
           #self.instance_eval { def listen ; raise StandardError, "Call has already ended. Unable to listen anymore." ; end }
           #return [false, div("Implicit hang up (nothing left to do)") + listen[1]]
           #raise StandardError, "Raisin' Cain!"
@@ -121,6 +127,10 @@ module Twilio
 
       when :hangup
         @call_status = :completed
+        @call_handler.phone = nil unless @call_handler.frozen?
+        @call_handler = nil
+        @queue.clear
+        self.freeze
         #[false, ( params[:silent] ? "" : div("Call ended") ) + javascript("call_completed();")]
         {:status => false, :call_completed => true}
 

@@ -1,15 +1,56 @@
-function rand_int(){ return Math.floor(Math.random()*10000); };
-var call_complete = true;
-function update_call_flow(){
-    $.ajax({
-			type: "GET",
-			url: '/call-sim/ajax',
-			data: {action:'next', rand:rand_int()},
-			success: add_json_to_call_flow_queue,
-			dataType: 'json',
-      timeout: 3*update_interval
-		});
+var var_call_complete = true;
+function call_complete() {
+  if( var_call_complete ){ reset(true); return; }
+
+  console.log( "Marking call as completed" );
+
+  var_call_complete = true;
+
+  var kids = $('#call_flow').children();
+  if( ! kids.eq(kids.length-1).hasClass('.call-divider') ) {
+    notify('Call Complete');
+    add_to_call_flow( $("<div class='call-divider'/>") );
+  }
 }
+function reset(silent){
+  if( !silent ){
+    add_to_call_flow( $("<div class='call-divider'/>") );
+  }
+  if(gathering) { gathering = false; gather_complete(); };
+  if(recording) { recording = false; record_complete(); };
+  if(pausing)   { pausing = false;   cancel_pause();    };
+
+
+  /* Disable Hangup button and CallFlow updates */
+  $('#hangup')[0].disabled=var_call_complete;
+
+  update_call_flow_interval(3000);
+  if( update_ptr ) {
+    toggle_auto_update_call_flow();
+  }
+}
+function call_active() {
+  if( !var_call_complete ){ return; }
+
+  console.log( "Marking call as active" );
+
+  var_call_complete = false;
+
+  notify('Call Active');
+
+  /* Enable Hangup button and CallFlow updates */
+  $('#hangup')[0].disabled=var_call_complete;
+
+  update_call_flow();
+  if( !update_ptr ) {
+    toggle_auto_update_call_flow();
+  }
+}
+$(function(){reset()}); /* Reset everything on page load */
+
+
+
+/******* Call Flow Queue Monitor *******/
 
 var call_flow_queue = new Array();
 var call_flow_queue_monitor_ptr = 0;
@@ -26,37 +67,23 @@ function call_flow_queue_monitor() {
   }
 }
 
-function add_json_to_call_flow_queue(data, status){
-  console.log(data);
-  $.each(data, function(){
 
-    var method = this.method;
-    var params = this.params;
-    var func = eval(method);
-
-    if( $.isFunction(func) ) {
-
-      call_flow_queue.push(function(){
-        console.log('Evaluating: '+method+'('+params+')');
-        func(params);
-      });
-
-      if( call_flow_queue_monitor_ptr == 0 ) {
-        call_flow_queue_monitor_ptr = 
-              setTimeout(call_flow_queue_monitor, 500);
-      }
-
-    } else {
-      console.log('Unable to process: '+this.method+' => '+this.params);
-    }
-
-    return true;
-  });
-}
-
-
+/****** Auto-Update Call Flow ******/
 var update_ptr = false;
 var update_interval = 1500;
+function toggle_auto_update_call_flow() {
+  if( update_ptr ) {
+    window.clearInterval(update_ptr);
+    update_ptr = false;
+    $('#auto_refresh_button')[0].textContent = "Enable Auto-Refresh"
+  } else {
+    update_ptr = window.setInterval(function() {
+      if( !pausing && (!gathering /*|| digits_pressed*/) && !recording ) { update_call_flow(); }
+    }, update_interval);
+    $('#auto_refresh_button')[0].textContent = "Disable Auto-Refresh"
+    update_call_flow();
+  }
+}
 function update_call_flow_interval(interval) {
   if( pausing ) { return false; };
   if( interval != null ) { update_interval = interval; };
@@ -69,21 +96,62 @@ function update_call_flow_interval(interval) {
   }
 }
 
-function toggle_auto_update_call_flow() {
-  if( update_ptr ) {
-    window.clearInterval(update_ptr);
-    update_ptr = false;
-    $('#auto_refresh_button')[0].textContent = "Enable Auto-Refresh"
-  } else {
-    update_ptr = window.setInterval(function() {
-      if( !pausing && (!gathering || digits_pressed) && !recording ) { update_call_flow(); }
-    }, update_interval);
-    $('#auto_refresh_button')[0].textContent = "Disable Auto-Refresh"
-    update_call_flow();
-  }
+/***** AJAX Callback Handler *****/
+function add_json_to_call_flow_queue(data, status){
+  console.log(data);
+  $.each(data, function(){
+
+    var method = this.method;
+    var params = this.params;
+    if( eval("typeof " + method + " == 'function'") ){
+      var func = eval(method);
+
+      console.log('Queueing: '+method+'('+params+')');
+      call_flow_queue.push(function(){
+        if( method != "call_complete" ) { call_active(); }
+        console.log('Evaluating: '+method+'('+params+')');
+        func(params);
+      });
+
+      if( call_flow_queue_monitor_ptr == 0 ) {
+        call_flow_queue_monitor_ptr = 
+              setTimeout(call_flow_queue_monitor, 500);
+      }
+
+    /*} else if(typeof this.call_complete == "boolean") {
+      if( this.call_complete ) {
+        call_complete();
+      }*/
+
+    } else {
+      call_active();
+      console.warn('Not a function: '+method+' => '+params);
+    }
+
+    return true;
+  });
 }
 
-$(toggle_auto_update_call_flow);
+function rand_int(){ return Math.floor(Math.random()*10000); };
+function update_call_flow(){
+    $.ajax({
+			type: "GET",
+			url: '/call-sim/ajax',
+			data: {action:'next', rand:rand_int()},
+			success: add_json_to_call_flow_queue,
+      error: function() { /* ignore errors */ },
+			dataType: 'json',
+      timeout: 3*update_interval
+		});
+}
+
+
+/****** Outgoint AJAX Calls ******/
+$.ajaxSetup({
+  error: function(xhr,status,error) {
+    console.error("AJAX Request Failed!",xhr,status,error);
+  }
+})
 
 function ajax_call(action, options) {
   if(options == null) { options = {} }
@@ -123,11 +191,15 @@ function ajax_call(action, options) {
       break;
   }
   $.get('/call-sim/ajax', params, add_json_to_call_flow_queue, 'json');
-  update_call_flow();
+  /*update_call_flow();
   if( !update_ptr ) {
     toggle_auto_update_call_flow();
-  }
+  }*/
 }
+
+
+
+/***** Control Panel "Controllers" *****/
 
 var countdown_remaining = 0;
 var countdown_ptr = 0;
@@ -163,32 +235,36 @@ function cancel_countdown() {
   countdown_ptr = 0;
 }
 
+
+
+/****** Call Action Handlers *******/
+
 function add_to_call_flow( elem ) {
-  elem.appendTo('#call_flow')[0].scrollIntoView(true);
+  elem.appendTo('#call_flow');
+  $('html,body').animate({scrollTop: $('body').height()},500);
   return elem;
 }
 
-function add_call_divider() {
-  add_to_call_flow( $("<div class='call-divider'/>") );
+function say(opts) {
+  var e = add_to_call_flow( $('<div class="say"><span></span></div>') );
+  $('span',e).text(opts.body);
 }
 
-function say(str) {
-  add_to_call_flow( $('<div class="say"><span>'+str+'</span></div>') );
-}
 function play(str) {
-  var e = add_to_call_flow( $('<div class="play"><span>Playing file at <a target="_new" href="'+str+'">'+$('<div/>').text(str).html()+'</a></span></div>') );
+  var e = add_to_call_flow( $('<div class="play"><span>Playing file at <a target="_new"></a></span></div>') );
+  $('a',e).text(str).href=str;
   $('<embed src="'+str+'" autostart=true loop=false>').appendTo($('div.play', e));
 }
 
 var gathering = false;
 var digits_pressed = false;
-function gather(t) {
+function gather(opts) {
   gathering = true;
   digits_pressed = false;
   add_to_call_flow( $('<div class="gather"><span>Gathering...</span></div>') );
   $('#gather_box').show()
 
-  countdown(t,function(){
+  countdown(opts.timeout,function(){
     $('#gather_box').hide()
     add_to_call_flow( $('<div class="gather timeout"><span>Gather timed out</span></div>') );
     ajax_call('gather_timeout');
@@ -207,12 +283,12 @@ function gather_complete() {
 }
 
 var recording = false;
-function record(t) {
+function record(opts) {
   recording = true;
   add_to_call_flow( $('<div class="gather"><span>Recording...</span></div>') );
   $('#record_box').show()
 
-  countdown(t,function(){
+  countdown(opts.timeout,function(){
     $('#record_box').hide()
     add_to_call_flow( $('<div class="record timeout"><span>Record timed out</span></div>') );
     ajax_call('record_timeout');
@@ -231,49 +307,60 @@ function record_complete() {
 var pausing = false;
 function pause(t) {
   pausing = true;
-  //$('#auto_refresh_button').disabled = true;
-  //toggle_auto_update_call_flow();
 
   countdown(t,function(){
-    //toggle_auto_update_call_flow();
-    //$('#auto_refresh_button').disabled = false;
     pausing = false;
   });
 
-  add_to_call_flow( $('<div class="pause">Pausing for '+t+' second(s)</div>') );
+  add_to_call_flow( $('<div class="pause">Pausing for '+parseInt(t)+' second(s)</div>') );
 }
 function cancel_pause() {
   cancel_countdown();
-  toggle_auto_update_call_flow();
   pausing = false;
 }
 
-function call_completed() {
-  var kids = $('#call_flow').children();
-  if( ! kids.eq(kids.length-1).hasClass('.call-divider') ) {
-    notify('Call Complete');
-    add_call_divider();
-  }
-
-  if(gathering) { gather_complete(); };
-  if(recording) { record_complete(); };
-  if(pausing)   { cancel_pause();    };
-
-  update_call_flow_interval(3000);
-  toggle_auto_update_call_flow();
+function parse(body) {
+  var e = add_to_call_flow( $('<div class="notify">Parsing TwiML Response:<div class="twiml"></div></div>') );
+  $('.twiml', e).text(body);
+}
+function calling(url) {
+  var e = add_to_call_flow( $('<div class="call notify">Simulating phone call to URL: <a></a></div>') );
+  $('a', e).text(url);
+  $('a', e).href = url;
+}
+function redirect(url) {
+  var e = add_to_call_flow( $('<div class="redirect notify">Redirecting to URL: <a></a></div>') );
+  $('a', e).text(url);
+  $('a', e).href = url;
+}
+function skip(twiml) {
+  var e = add_to_call_flow( $('<div class="notify">NOT Parsing:<div class="twiml"></div></div>') );
+  $('.twiml', e).text(twiml);
+}
+function hangup(msg) {
+  var e = add_to_call_flow( $('<div class="hangup notify">Hanging up:<span class="msg"></span></div>') );
+  $('.msg',e).text(msg);
+  call_complete();
 }
 
-function reload_page() {
-  console.log('Reloading page');
-  window.location.reload();
-}
+
+
+
+
+
+
+
+
+
 function notify(body) {
-  console.log('Notify: '+body);
+  console.warn('Notify: '+body);
   add_to_call_flow( $('<div class="notify"/>') ).html(body);
 }
 function twiml(body) {
+  console.warn('TwiML: '+body);
   add_to_call_flow( $('<div class="twiml"/>').text(body) );
 }
 function noop() {
+  console.warn('NOOP');
   return;
 }

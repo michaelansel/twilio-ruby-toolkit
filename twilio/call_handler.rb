@@ -1,26 +1,39 @@
 module Twilio
   class CallHandler
-    # Works like a model
-    attr_accessor :phone
-
     def initialize(opts = {})
-      if opts[:phone]
-        @phone = opts[:phone]
-      else
-        @phone = Twilio::Phone.new
-        @phone.call_handler = self
-      end
-
-      @processing_queue = []
-      @input_status = :none
-      @input_verb = nil
-      @input_data = ""
-      @cookie = ""
+      @processing_queue = opts[:processing_queue] || (opts[:queue_class] || Array).new
+      @output_queue     = opts[:output_queue]     || (opts[:queue_class] || Array).new
+      @input_status     = :none
+      @input_verb       = nil
+      @input_data       = ""
+      @cookie           = ""
     end
 
-    def clear_queue
-      @processing_queue.clear
-      @processing_queue = []
+    ### Processing Queue "API" ###
+    # FIXME Not complete
+    # replace(ary)    Clear the queue and add elements of ary
+    # clear           Remove all objects from the queue
+    # <<(obj)         Append obj to the end of the queue
+    # empty?          Is the queue completely empty?
+    # unshift         Insert obj at the beginning of the queue
+    # shift           Remove and return the first object in the queue
+
+
+    def destroy
+      raise NotImplementedError, "destroy is deprecated"
+      unless @phone.nil? or @phone.frozen?
+        @phone.instance_eval { @queue.clear ; self.freeze }
+      end
+      self.instance_variables.each do|var|
+        eval "#{var} = nil"
+      end
+      self.freeze
+    end
+
+    def output(status = @processing_queue.empty?)
+      output = @output_queue.dup.to_a
+      @output_queue.clear
+      [output,status]
     end
 
     def queue_empty?
@@ -28,63 +41,81 @@ module Twilio
     end
 
     def process_queue
-      return nil if [:gather_waiting, :record_waiting].include? @input_status
-      return nil if queue_empty?
+      #puts "Preparing to process queue"
+      #print "@processing_queue:"
+      #puts @processing_queue.to_yaml
+      puts "@input_status = #{@input_status}"
+      return output(false) if [:gather_waiting, :record_waiting].include? @input_status
+      return output  if queue_empty?
 
-      process_response(@processing_queue.shift)
+      puts "Flushed!" if
+      catch(:flush) do
+        begin
+          continue = true
+          while continue
+            continue = process_response(@processing_queue.shift)
+            throw :flush if [:gather_waiting, :record_waiting].include? @input_status
+          end
+        rescue Exception => e
+          STDERR.puts e.to_s
+          STDERR.puts e.backtrace
+          @output_queue << {:error => "Exception Raised: #{e.to_s}"}
+        end
+        false
+      end
+      return output
     end
 
     def process_response(xml_or_verb_root)
       if xml_or_verb_root.class == String
         begin
           root = Twilio::TwiML.parse(xml_or_verb_root)
-          @phone.parse root.to_xml
+          @output_queue << {:parse => root.to_xml}
         rescue Exception => e
-          @phone.parse xml_or_verb_root
-          @phone.notify "Unable to parse TwiML (#{e.to_s})"
-          puts "Triggering a hangup on TwiML parsing failure"
-          hangup
-          raise e
+          @output_queue << {:parse => xml_or_verb_root}
+          @output_queue << {:error => "Unable to parse TwiML (#{e.to_s})"}
+          throw :flush
         end
       elsif xml_or_verb_root.class.include? Twilio::Verb
         root = xml_or_verb_root
-      elsif xml_or_verb_root.class == Symbol
+      elsif [Symbol,Hash].include? xml_or_verb_root.class 
         root = xml_or_verb_root
       elsif xml_or_verb_root.nil?
-        return false
+        throw :flush
       else
-        raise ArgumentError, "Invalid input; not a Verb or String (#{xml_or_verb_root.inspect})"
+        raise ArgumentError, "Invalid input; Not proccessable (#{xml_or_verb_root.inspect})"
       end
 
       case root
         when Response
-          @processing_queue.unshift :response_complete
-          root.children.reverse.each{|c| @processing_queue.unshift(c) }
+          @processing_queue.replace root.children
+          @processing_queue << :response_complete
 
         when Say
           root.loop.to_i.times do
-            @phone.say(root.body, hash_select(root.valid_attributes, :voice, :language))
+            @output_queue << {:say => { :body => root.body, :voice => root.voice, :language => root.language } }
           end
 
         when Play
           root.loop.to_i.times do
-            @phone.play root.body
+            @output_queue << {:play => root.body}
           end
 
         when Gather
-          @phone.gather(root.merged_attributes)
+          @output_queue << {:gather => root.merged_attributes }
           @input_status = :gather_processing
           @input_verb = root
-          @processing_queue.unshift(:gather_processed)
-          root.children.reverse.each{|c| @processing_queue.unshift(c) }
+          ( root.children.concat([:gather_processed]) ).reverse.each do |i|
+            @processing_queue.unshift(i)
+          end
 
         # All children of Gather have been processed, waiting for Digits or timeout
         when :gather_processed
           @input_status = :gather_waiting
-          @phone.notify "Waiting for Digits or timeout (Gather)..."
+          @output_queue << {:notify => :gather_waiting}
 
         when Record
-          @phone.record(root.merged_attributes)
+          @output_queue << {:record => root.merged_attributes}
           @input_status = :record_processing
           @input_verb = root
           @processing_queue.unshift(:record_processed)
@@ -92,21 +123,21 @@ module Twilio
 
         when :record_processed
           @input_status = :record_waiting
-          @phone.notify "Waiting for timeout (Record)..."
+          @output_queue << {:notify => :gather_waiting}
 
         when Dial
-          @phone.notify "Sorry, I don't know how to handle a Dial verb yet!"
+          @output_queue << {:error => "Sorry, I don't know how to handle a Dial verb yet!"}
 
         when Number
-          @phone.notify "Sorry, I don't know how to handle a Number noun yet!"
+          @output_queue << {:error => "Sorry, I don't know how to handle a Number noun yet!"}
 
         when Redirect
-          @phone.redirect root.body
+          @output_queue << {:redirect => root.body}
 
-          return unless valid_uri?(root.body)
+          throw :flush unless valid_uri?(root.body)
 
           # Add a placeholder so concurrent calls don't try to hang up
-          @processing_queue << :loading
+          #@processing_queue << :loading
 
           skip_remainder_of_response()
 
@@ -119,29 +150,84 @@ module Twilio
           if resp.code.to_i == 200
             @processing_queue.unshift resp.body
           else
-            @phone.notify "Request Error (#{resp.code}): #{resp.message}"
+            @output_queue << {:error => "Request Error (#{resp.code}): #{resp.message}"}
           end
-          @processing_queue.delete(:loading)
+          #@processing_queue.delete(:loading)
 
         when Pause
-          @phone.pause(root.length)
+          @output_queue << {:pause => root.length}
 
         when Hangup, :hangup
-          puts "Triggering a hangup on parsing #{root.class} -- #{root}."
-          hangup
+          @output_queue << {:hangup => "Explicit hangup"}
+          print "@output_queue"
+          puts @output_queue.to_yaml
+          reset
+          print "@output_queue"
+          puts @output_queue.to_yaml
+          throw :flush
 
         when :response_complete
           if @processing_queue.include? :loading
             puts "Done processing, but waiting for something to load"
           else
-            puts "Triggering a hangup on :response_complete"
-            hangup
+            @output_queue << {:hangup => "Finished processing Response"}
+            reset
           end
+          throw :flush
 
         when :loading
           puts "Waiting for something to load..."
+          print "Processing queue:"
+            @processing_queue.to_a.to_yaml
+
           @processing_queue.unshift :loading
-          return nil
+          throw :flush
+
+        when Hash
+          case root.keys.first
+          when :call_url
+            puts "blah blah blah" * 50
+
+          when :press_digits
+            root = root[:press_digits]
+            unless valid_uri?(root[:verb].action)
+              @output_queue << {:error => "Invalid URI: #{root[:verb].action}"}
+              throw :flush
+            end
+
+
+            # Skip over any unprocessed elements under the Gather
+            if ( root[:status] == :gather_processing ) and ( @processing_queue.index(:gather_processed) >= 0 )
+              until( (e=@processing_queue.delete_at(0)) == :gather_processed ) do
+                @output_queue << {:skip => e.to_xml(:skip_instruct => true)}
+              end
+            end
+
+            # Skip the rest of the response; we are done with this TwiML doc
+            skip_remainder_of_response();
+
+
+            @output_queue << {:notify => (root[:verb].method.upcase + "ing to #{root[:verb].action}" +
+                            " with params #{ {:Digits => root[:data]}.inspect }") }
+
+            # Submit @input_data to "action" URL
+            if root[:verb].method.downcase.to_sym == :post
+              method = "POST"
+              resp,uri = _post(root[:verb].action, :Digits => root[:data])
+            else
+              method = "GET"
+              resp,uri = _get(root[:verb].action, :Digits => root[:data])
+            end
+
+            if resp.code.to_i == 200
+              @output_queue << {:notify => "Submitted Gathered Digits: #{method} #{uri.to_s}"}
+              @processing_queue.unshift resp.body
+            else
+              @output_queue << {:notify => ("Request Error (#{resp.code}): #{resp.message}" +
+                                "URI: #{uri.to_s} Params: #{ {:Digits => root[:data]}.inspect }")}
+            end
+
+          end
 
         else
           raise StandardError, "Unknown element: #{root.class} -- #{root.inspect}"
@@ -152,118 +238,77 @@ module Twilio
 
 
 
-    def hangup(opts = {})
-      puts "Hangup received; Resetting state..."
-
-      #gathering = [:gather_waiting, :gather_processing].include? @input_status
-      #recording = [:record_waiting, :record_processing].include? @input_status
-
-      clear_queue()
-      #@phone.clear_queue();
-      initialize(:phone => @phone)
-
-      #@phone.gather_complete if gathering
-      #@phone.record_complete if recording
-
-      @phone.hangup#(:silent => opts[:silent])
+    def reset
+      puts "Clearing @processing_queue"
+      puts caller.length > 5 ? caller[0..5] : caller
+      print "Previous contents: "
+      puts @processing_queue.to_a.to_yaml
+      @processing_queue.clear
     end
 
     def call_url(url, params = {})
       puts "Calling URL: #{url}"
-      @phone.call url
+      @output_queue << {:calling => url}
 
-      return unless valid_uri?(url)
+      return output unless valid_uri?(url)
 
       # Add a placeholder so concurrent calls don't try to hang up
-      @processing_queue << :loading
+      #@processing_queue << :loading #NOTE Should be safe thanks to mutex
 
       resp,uri = _post(url, params)
       if resp.code.to_i == 200
+        puts "Page retrieved successfully:"
+        puts resp.body
         @processing_queue << resp.body 
         @processing_queue << :hangup
       else
-        @phone.notify "Request Error (#{resp.code}): #{resp.message}"
+        @output_queue << {:error => "Request Error (#{resp.code}): #{resp.message}"}
       end
-      @processing_queue.delete(:loading)
+      #@processing_queue.delete(:loading)
+
+      print "@processing_queue"
+      puts @processing_queue.to_yaml
+
+      process_queue
     end
 
     def press_digit(digit)
       #return false if @input_status == :gather_handling # We are already handling the Gather
-      return false unless [:gather_processing, :gather_waiting].include? @input_status
+      puts "Handling digit press (#{digit})"
+      puts "@input_status = #{@input_status}"
+
+      unless [:gather_processing, :gather_waiting].include? @input_status
+        @output_queue << {:notify => "Keypress REJECTED (#{digit})}"}
+        return output
+      end
+
       @input_data << "#{digit}"
-      return true if @input_data.length < @input_verb.numDigits.to_i
+      @output_queue << {:notify => "Keypress accepted (#{digit})"}
+      return output if @input_data.length < @input_verb.numDigits.to_i
 
-      # Save the input variables so we can reset them
-      input_status,input_verb,input_data = @input_status,@input_verb,@input_data
+      puts "Done collecting digits"
+      @processing_queue.unshift( {:press_digits => {:status => @input_status, :verb => @input_verb, :data => @input_data}} )
 
-      # We are resetting now so that the "gather_complete" notification
-      # goes out without having to wait for the next response.
-      #     Faster response == better user experience
-      #
-      # Reset input variables and notify phone gather is complete
-      self.gather_complete
-
-      # Block this out from being launched multiple times
-      #@input_status = :gather_handling
-
-      return unless valid_uri?(input_verb.action)
-
-
-      # Add a placeholder so concurrent calls don't try to hang up
-      @processing_queue << :loading
-
-      # Skip over any unprocessed elements under the Gather
-      if ( input_status == :gather_processing ) and ( @processing_queue.index(:gather_processed) >= 0 )
-        until( (e=@processing_queue.delete_at(0)) == :gather_processed ) do
-          @phone.skip e.to_xml(:skip_instruct => true)
-        end
-      end
-
-      # Skip the rest of the response; we are done with this TwiML doc
-      skip_remainder_of_response();
-
-
-      @phone.notify(input_verb.method.upcase + "ing to #{input_verb.action}" +
-                    " with params #{ {:Digits => input_data}.inspect }")
-
-      # Submit @input_data to "action" URL
-      if input_verb.method.downcase.to_sym == :post
-        method = "POST"
-        resp,uri = _post(input_verb.action, :Digits => input_data)
-      else
-        method = "GET"
-        resp,uri = _get(input_verb.action, :Digits => input_data)
-      end
-
-      if resp.code.to_i == 200
-        @phone.notify("Submitted Gathered Digits: #{method} #{uri.to_s}")
-        @processing_queue.unshift resp.body
-      else
-        @phone.notify "Request Error (#{resp.code}): #{resp.message}" +
-          "URI: #{uri.to_s} Params: #{ {:Digits => input_data}.inspect }"
-      end
-      @processing_queue.delete(:loading)
-
-      return true
+      return gather_complete
     end
 
-    # Reset input variables and notify phone we are done Gathering
-    def gather_complete
+    def gather_complete(params={})
       @input_status = :none
       @input_verb = nil
       @input_data = ""
-      @phone.gather_complete
-    end
-    alias :gather_timeout :gather_complete
+      @output_queue << {:gather_complete => {:timeout => (params[:timeout] || false)}}
 
-    # Reset input variables and notify phone we are done Recording
-    def record_complete
+      return output
+    end
+
+    def record_complete(params={})
       @input_status = :none
       @input_verb = nil
       @input_data = ""
-      @phone.record_complete
+      @output_queue << {:record_complete => {:timeout => (params[:timeout] || false)}}
+
+      return output
     end
-    alias :record_timeout :record_complete
 
 
 
@@ -334,18 +379,20 @@ module Twilio
 
     def skip_remainder_of_response()
       # Clear the rest of the current response from the queue
-      end_of_response_index = @processing_queue.index(:response_complete)
+      end_of_response_index = @processing_queue.to_a.index(:response_complete)
       case end_of_response_index
-      when -1
+      when -1,nil
         # Shouldn't be possible; just clear the whole queue
-        @processing_queue = []
+        puts "Trying to skip remainder of response when nothing remains in processing_queue!"
+        @processing_queue.clear
       when 0
         # We are already at the end of the response, just remove the marker
-        @processing_queue.delete_at(0)
+        @processing_queue.shift
       else
         # One or more elements remain to be processed, notify and remove
-        until( (e=@processing_queue.delete_at(0)) == :response_complete ) do
-          @phone.skip e.to_xml(:skip_instruct => true)
+        until( (e=@processing_queue.shift) == :response_complete ) do
+          puts "Skipping "+e.inspect
+          @output_queue << {:skip => e.to_xml(:skip_instruct => true)}
         end
       end
     end
@@ -355,18 +402,13 @@ module Twilio
       begin
         uri = URI.parse(uri_to_test)
       rescue Exception => e
-        @phone.notify "Unable to parse URI:"
-        @phone.twiml  "#{e.to_s}\n\n#{e.backtrace}"
-        puts "Hanging up because we can't parse the Redirect URI"
-        hangup
+        @output_queue << {:error => {:body => "Unable to parse URI:", :twiml => "#{e.to_s}\n\n#{e.backtrace}" }}
         return false
       end
 
       # Make sure we have a complete URI
       if uri.host.nil? or uri.port.nil?
-        @phone.notify "Unable to handle relative URI: #{uri.to_s}"
-        puts "Hanging up because we don't know how to handle relative URIs yet"
-        hangup
+        @output_queue << {:error => "Unable to handle relative URI: #{uri.to_s}"}
         return false
       end
 

@@ -19,7 +19,7 @@
 /** Left Sidebar **/
 #call_url #url {
   font-size: 1.5em;
-  width: 500px;
+  width: 400px;
   z-index: 1;
 }
 #quick_call_links > br { display: none; }

@@ -226,7 +226,7 @@ module Twilio
       options[:skip_instruct] = true
 
       attrs = {}
-      attributes.each {|a| attrs[a] = send(a) unless send(a).nil? } unless attributes.nil?
+      attributes.each {|a| attrs[a] = send(a) unless instance_variable_get("@#{a.to_s}").nil? } unless attributes.nil?
 
       if not @children.empty? and @body.nil?
         xml.tag!(verb_name, attrs) do
