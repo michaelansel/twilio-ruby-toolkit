@@ -20,7 +20,7 @@ before do
   if session[:dbq_session_id]
     puts session[:dbq_session_id]
     m = DatabaseMutex.find(:first, :conditions => {:session_id => session[:dbq_session_id]})
-    if not m.nil? and (Time.now - m.update_at) < MutexTimeout
+    if not m.nil? and (Time.now - m.updated_at) < MutexTimeout
       puts "Mutex lock: #{m.inspect}"
       halt "Mutex lock"
     end
